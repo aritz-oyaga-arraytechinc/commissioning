@@ -152,17 +152,381 @@ class TscBacktracking(IConfiguration):
         return parameters
 
 class IwcWindSpeedThresholds(IConfiguration):
-    def __init__(self, wind_speed_threshold_deactivation: float, wind_speed_threshold_activation) -> None:
+    def __init__(self, wind_speed_threshold_deactivation: float, wind_speed_threshold_activation: float) -> None:
+        """Data entered in kilometers per hour"""
         self.wind_speed_threshold_deactivation = wind_speed_threshold_deactivation
         self.wind_speed_threshold_activation = wind_speed_threshold_activation
     @cached_property
     @override
     def modbus_package(self) -> list[int]:
         parameters = []
-        deac1, deac2 = struct.unpack("<HH", struct.pack("<f", self.wind_speed_threshold_deactivation))
-        act1, act2 = struct.unpack("<HH", struct.pack("<f", self.wind_speed_threshold_activation))
-        parameters.extend([deac1, deac2, act1, act2])
+        deact1, deact2 = struct.unpack("<HH", struct.pack("<f", self.wind_speed_threshold_deactivation / 3.6))
+        act1, act2 = struct.unpack("<HH", struct.pack("<f", self.wind_speed_threshold_activation / 3.6))
+        parameters.extend([deact1, deact2, act1, act2])
         return parameters
+
+class IwcWindAlarmTime(IConfiguration):
+    def __init__(self, wind_alarm_time_deactivation: int, wind_alarm_time_activation: int) -> None:
+        """Data entered in seconds"""
+        self.wind_alarm_time_deactivation = wind_alarm_time_deactivation
+        self.wind_alarm_time_activation = wind_alarm_time_activation
+    @cached_property
+    @override
+    def modbus_package(self) -> list[int]:
+        parameters = []
+        parameters.append(struct.unpack("<H", struct.pack("<h", self.wind_alarm_time_deactivation))[0])
+        parameters.append(struct.unpack("<H", struct.pack("<h", self.wind_alarm_time_activation))[0])
+        return parameters
+
+class IwcAvgTime(IConfiguration):
+    def __init__(self, average_time: int) -> None:
+        """Data entered in minutes"""
+        self.average_time = average_time
+    @cached_property
+    @override
+    def modbus_package(self) -> list[int]:
+        parameters = []
+        parameters.append(struct.unpack("<H", struct.pack("<h", self.average_time))[0])
+        return parameters
+
+class IwcRelaxTime(IConfiguration):
+    def __init__(self, relax_time: int) -> None:
+        """Data entered in minutes"""
+        self.relax_time = relax_time
+    @cached_property
+    @override
+    def modbus_package(self) -> list[int]:
+        parameters = []
+        parameters.append(struct.unpack("<H", struct.pack("<h", self.relax_time))[0])
+        return parameters
+
+class IwcSnowThreshold(IConfiguration):
+    def __init__(self, snow_threshold: float) -> None:
+        """Data entered in meters"""
+        self.snow_threshold = snow_threshold
+    @cached_property
+    @override
+    def modbus_package(self) -> list[int]:
+        parameters = []
+        parameters.extend(struct.unpack("<HH", struct.pack("<f", self.snow_threshold)))
+        return parameters
+
+class IwcSnowActivationTime(IConfiguration):
+    def __init__(self, activation_time: int) -> None:
+        """Data entered in minutes"""
+        self.activation_time = activation_time
+    @cached_property
+    @override
+    def modbus_package(self) -> int:
+        return struct.unpack("<H", struct.pack("<h", self.activation_time))[0]
+
+class IwcSnowDeactivationTime(IConfiguration):
+    def __init__(self,deactivation_time: int) -> None:
+        """Data entered in minutes"""
+        self.deactivation_time = deactivation_time
+    @cached_property
+    @override
+    def modbus_package(self) -> int:
+        return struct.unpack("<H", struct.pack("<h", self.deactivation_time))[0]
+
+class IwcSnowSampleTime(IConfiguration):
+    def __init__(self, sample_period: int) -> None:
+        """Data entered in minutes"""
+        self.sample_period = sample_period
+    @cached_property
+    @override
+    def modbus_package(self) -> int:
+        return struct.unpack("<H", struct.pack("<h", self.sample_period))[0]
+
+class IwcSnowMaxVariation(IConfiguration):
+    def __init__(self, max_variation: int) -> None:
+        """Data entered in millimeters"""
+        self.max_variation = max_variation
+    @cached_property
+    @override
+    def modbus_package(self) -> int:
+        return struct.unpack("<H", struct.pack("<h", self.max_variation))[0]
+
+class IwcPanID(IConfiguration):
+    def __init__(self, pan_id: str) -> None:
+        self.pan_id = pan_id
+    @cached_property
+    @override
+    def modbus_package(self) -> list[int]:
+        parameters = []
+        pan_regs = struct.unpack(">4H", bytes.fromhex(self.pan_id))
+        parameters.extend(pan_regs[::-1])
+        return parameters
+
+def iwc_set_sensors(client: ModbusTcpClient, dev_id: int, snow: bool, rika: bool, pira: bool, flood: bool, temperature: bool) -> bool:
+    """Define the active sensors
+
+            :param client: ModbusTcpClient
+            :param dev_id: modbus device id
+            :param snow: has snow sensor or not
+            :param rika: has rika sensor or not
+            :param pira: has pira sensor or not
+            :param flood: has flood sensor or not
+            :param temperature: has temperature sensor or not
+            return True if the registers were configured, False otherwise.
+        """
+    try:
+        reading = client.read_holding_registers(address=41008, count=1, device_id=dev_id)
+        value = reading.registers[0] & 0xFC1F
+        value = value + (snow << 5)
+        value = value + (rika << 6)
+        value = value + (pira << 7)
+        value = value + (flood << 8)
+        value = value + (temperature << 9)
+        writing = client.write_register(address=41008, value=value, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} to {value} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_set_modbus_id(client: ModbusTcpClient, dev_id: int, new_modbus_id: int) -> bool:
+    """Define the new modbus identifier
+
+            :param client: ModbusTcpClient
+            :param dev_id: modbus device id
+            :param new_modbus_id: device new modbus identifier
+            return True if the registers were configured, False otherwise.
+        """
+    try:
+        reading = client.read_holding_registers(address=41002, count=1, device_id=dev_id)
+        value = reading.registers[0] & 0xFF00
+        value = value + new_modbus_id
+        writing = client.write_register(address=41002, value=value, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} to {new_modbus_id} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_set_pan_id(client: ModbusTcpClient, dev_id: int, parameters: IwcPanID) -> bool:
+    """Define the xbee PAN identifier
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: array with device xbee PAN identifier in hex
+        return True if the registers were configured, False otherwise.
+        """
+    try:
+        writing = client.write_registers(address=41062, values=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_snow_alarm_activation_time(client: ModbusTcpClient, dev_id: int, parameters: IwcSnowActivationTime) -> bool:
+    """Define the snow configuration
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: Snow alarm activation
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_register(address=41217, value=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_snow_deactivation_time(client: ModbusTcpClient, dev_id: int, parameters: IwcSnowDeactivationTime) -> bool:
+    """Define the snow configuration
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: Snow alarm deactivation time
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_register(address=41218, value=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_snow_sample_period(client: ModbusTcpClient, dev_id: int, parameters: IwcSnowSampleTime) -> bool:
+    """Define the snow configuration
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: sample_period
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_register(address=41219, value=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_snow_maximum_variation(client: ModbusTcpClient, dev_id: int, parameters: IwcSnowMaxVariation) -> bool:
+    """Define the snow configuration
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: max_variation
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_register(address=41220, value=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_snow_threshold(client: ModbusTcpClient, dev_id: int, parameters: IwcSnowThreshold) -> bool:
+    """Define the meters detected to trigger a snow alarm.
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: Snow height measured in meters to trigger a snow alarm.
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_registers(address=41054, values=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_relax_time(client: ModbusTcpClient, dev_id: int, parameters: IwcRelaxTime) -> bool:
+    """Define the time in minutes to hold the alarm after an activation
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: Time to deactivate and activate the wind speed alarm
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_registers(address=41214, values=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_wind_alarms_2_and_3(client: ModbusTcpClient,
+                            dev_id: int,
+                            speed2: IwcWindSpeedThresholds,
+                            speed3: IwcWindSpeedThresholds,
+                            time2: IwcWindAlarmTime,
+                            time3: IwcWindAlarmTime,
+                            avg3_time: IwcAvgTime) -> bool:
+    """Define the iwc wind alarm activation and deactivation.
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param speed2: Wind speed thresholds to deactivate and activate the wind speed alarm 2
+        :param speed3: Wind speed thresholds to deactivate and activate the wind speed alarm 3
+        :param time2: Time to deactivate and activate the wind speed alarm 2
+        :param time3: Time to deactivate and activate the wind speed alarm 3
+        :param avg3_time: Average time to deactivate and activate the wind speed alarm 3, maximum 10
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        values = []
+        values.extend(speed2.modbus_package)
+        values.extend(speed3.modbus_package)
+        values.extend(time2.modbus_package)
+        values.extend(time3.modbus_package)
+        values.extend(avg3_time.modbus_package)
+        writing = client.write_registers(address=41200, values=values, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_wind_alarm_time(client: ModbusTcpClient, dev_id: int, parameters: IwcWindAlarmTime) -> bool:
+    """Define the iwc wind alarm time activation and deactivation.
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: Time to deactivate and activate the wind speed alarm
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_registers(address=41017, values=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
+
+def iwc_wind_speed_thresholds(client: ModbusTcpClient, dev_id: int, parameters: IwcWindSpeedThresholds) -> bool:
+    """Define the iwc wind speed thresholds
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        :param parameters: Wind speed thresholds to deactivate and activate the wind speed alarm
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        writing = client.write_registers(address=41011, values=parameters.modbus_package, device_id=dev_id)
+        if not writing.isError():
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be prepared -> {e}")
+        return False
 
 def tsc_set_commissioning_state(client: ModbusTcpClient, dev_id: int, commissioning_state: int) -> bool:
     """Define the tracker commissioning state
@@ -266,7 +630,7 @@ def tsc_software_movement_limits(client:ModbusTcpClient, dev_id: int, parameters
         return False
 
 def tsc_set_modbus_id(client: ModbusTcpClient, dev_id: int, new_modbus_id: int) -> bool:
-    """Define the xbee PAN identifier
+    """Define the new modbus identifier
 
             :param client: ModbusTcpClient
             :param dev_id: modbus device id
@@ -287,7 +651,7 @@ def tsc_set_modbus_id(client: ModbusTcpClient, dev_id: int, new_modbus_id: int) 
         return False
 
 def tsc_reset_communication(client: ModbusTcpClient, dev_id: int) -> bool:
-    """Define the xbee PAN identifier
+    """Reset communications to set the values
 
         :param client: ModbusTcpClient
         :param dev_id: modbus device id
@@ -406,6 +770,25 @@ def tsc_save_non_volatile_memory(client: ModbusTcpClient, dev_id: int) -> bool:
         print(f"TSC {dev_id} cannot be configured -> {e}")
         return False
 
+def iwc_save_non_volatile_memory(client: ModbusTcpClient, dev_id: int) -> bool:
+    """Save the iwc data stored in the flash memory in the non-volatile memory.
+
+        :param client: ModbusTcpClient
+        :param dev_id: modbus device id
+        return True if the registers were configured, False otherwise.
+    """
+    try:
+        save_nvm = client.write_register(address=40007, value=1 << 15, device_id=dev_id)
+        if not save_nvm.isError():
+            print(f"IWC {dev_id} configured successfully.")
+            return True
+        else:
+            print(f"IWC {dev_id} cannot save the configuration.")
+        return False
+    except Exception as e:
+        print(f"IWC {dev_id} cannot be configured -> {e}")
+        return False
+
 def iwc_configure_telemetry(client: ModbusTcpClient, dev_id: int, conf: IwcConfiguration) -> bool:
     """Configure the telemetry of the IWC.
 
@@ -419,12 +802,12 @@ def iwc_configure_telemetry(client: ModbusTcpClient, dev_id: int, conf: IwcConfi
         if not writing.isError():
             save_nvm = client.write_register(address=40007, value=1 << 15, device_id=dev_id)
             if not save_nvm.isError():
-                print(f"IWC {dev_id} configured successfully.")
+                print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} configured successfully.")
                 return True
             else:
-                print(f"IWC {dev_id} cannot save the configuration.")
+                print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot save the configuration.")
         else:
-            print(f"IWC {dev_id} cannot be configured.")
+            print(f"IWC {dev_id} {inspect.currentframe().f_code.co_name} cannot be configured.")
         return False
     except Exception as e:
         print(f"IWC {dev_id} cannot be configured -> {e}")
